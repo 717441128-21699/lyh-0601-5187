@@ -34,7 +34,7 @@ export default function AlertList() {
   const [search, setSearch] = useState('');
 
   const scopedAlerts = useMemo(
-    () => filterAlertsByScope(user?.role || 'national', user?.province, user?.city),
+    () => filterAlertsByScope(user?.role || 'national', user?.province, user?.city, undefined, user?.farmIds),
     [filterAlertsByScope, user]
   );
 
@@ -54,11 +54,13 @@ export default function AlertList() {
     today: scopedAlerts.filter((a) => formatDate(a.triggeredAt) === formatDate(new Date().toISOString())).length,
   }), [scopedAlerts]);
 
-  const scopeLabel = user?.role === 'national'
-    ? '全国'
-    : user?.province
-      ? user?.city ? `${user.province} · ${user.city}` : user.province
-      : '全国';
+  const scopeLabel = user?.farmIds && user.farmIds.length > 0
+    ? `${user.province || ''} ${user.city || ''} · 我的养殖场`
+    : user?.role === 'national'
+      ? '全国'
+      : user?.province
+        ? user?.city ? `${user.province} · ${user.city}` : user.province
+        : '全国';
 
   return (
     <div className="space-y-6 animate-fade-in">

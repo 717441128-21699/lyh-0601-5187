@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import ReactECharts from 'echarts-for-react';
 import * as echarts from 'echarts';
@@ -75,36 +75,43 @@ export default function Dashboard() {
     filterAlertsByScope,
   } = useDataStore();
 
-  // 计算当前筛选和权限范围下的统计数据
+  const role = user?.role || 'national';
+  const province = user?.province;
+  const city = user?.city;
+  const farmIds = user?.farmIds;
+
+  // 省份筛选+品种+角色范围 → 最终生效的省份参数
+  const effectiveProvince = selectedProvince === '全国' ? province : selectedProvince;
+
+  // 统计卡片：受省份筛选+品种+角色+farmIds影响
   const overview = useMemo(
-    () => computeOverviewStats(user?.role || 'national', user?.province, user?.city, selectedSpecies),
-    [computeOverviewStats, user, selectedSpecies]
+    () => computeOverviewStats(role, effectiveProvince, city, selectedSpecies, farmIds),
+    [computeOverviewStats, role, effectiveProvince, city, selectedSpecies, farmIds]
   );
 
+  // 省份统计：受省份筛选+品种+角色+farmIds影响
   const provinceStats = useMemo(
-    () => computeProvinceStats(user?.role || 'national', user?.province, selectedSpecies),
-    [computeProvinceStats, user, selectedSpecies]
+    () => computeProvinceStats(role, effectiveProvince, selectedSpecies, farmIds),
+    [computeProvinceStats, role, effectiveProvince, selectedSpecies, farmIds]
   );
 
+  // 养殖区动态：受省份筛选+品种+角色+farmIds影响
   const filteredZones = useMemo(
-    () => filterZonesByScope(user?.role || 'national', user?.province, user?.city, selectedSpecies),
-    [filterZonesByScope, user, selectedSpecies]
+    () => filterZonesByScope(role, effectiveProvince, city, selectedSpecies, farmIds),
+    [filterZonesByScope, role, effectiveProvince, city, selectedSpecies, farmIds]
   );
 
+  // 实时预警：受省份筛选+品种+角色+farmIds影响
   const filteredAlerts = useMemo(() => {
-    return filterAlertsByScope(user?.role || 'national', user?.province, user?.city, selectedSpecies)
+    return filterAlertsByScope(role, effectiveProvince, city, selectedSpecies, farmIds)
       .filter((a) => a.status !== 'closed' && a.status !== 'false_alarm')
       .sort((a, b) => b.triggeredAt.localeCompare(a.triggeredAt))
       .slice(0, 6);
-  }, [filterAlertsByScope, user, selectedSpecies]);
+  }, [filterAlertsByScope, role, effectiveProvince, city, selectedSpecies, farmIds]);
 
-  // 按省份筛选进一步过滤
-  const displayStats = useMemo(() => {
-    if (selectedProvince === '全国' || !selectedProvince) return provinceStats;
-    return provinceStats.filter((s) => s.province === selectedProvince);
-  }, [provinceStats, selectedProvince]);
+  // 热力图和排名使用provinceStats
+  const displayStats = provinceStats;
 
-  // 热力图配置
   const heatmapOption = useMemo(() => {
     const data = displayStats.map((s) => ({
       name: s.province,
@@ -153,7 +160,6 @@ export default function Dashboard() {
     };
   }, [displayStats]);
 
-  // 产量排名配置
   const rankingOption = useMemo(() => {
     const sorted = [...displayStats].sort((a, b) => b.estimatedYield - a.estimatedYield).slice(0, 10);
     return {
@@ -205,7 +211,6 @@ export default function Dashboard() {
     };
   }, [displayStats]);
 
-  // 注册简化的中国地图
   useEffect(() => {
     if (!echarts.getMap('china')) {
       const geoJson: any = {
@@ -229,13 +234,24 @@ export default function Dashboard() {
     }
   }, []);
 
-  // 省份筛选：非国家级只能看本省
-  const availableProvinces = ['全国', ...(user?.role !== 'national' && user?.province ? [user.province] : PROVINCE_OPTIONS)];
-  const scopeLabel = user?.role === 'national'
-    ? '全国'
-    : user?.province
-      ? user?.city ? `${user.province} · ${user.city}` : user.province
-      : '全国';
+  // 省份筛选选项：国家级可切换全国/各省；省级只能看本省；市级/养殖户不可切
+  const availableProvinces = (() => {
+    if (farmIds && farmIds.length > 0) return [province || '全国'];
+    if (role === 'national') return ['全国', ...PROVINCE_OPTIONS];
+    if (role === 'provincial' && province) return [province];
+    if ((role === 'municipal' || role === 'technician') && province) return [province];
+    return ['全国', ...PROVINCE_OPTIONS];
+  })();
+
+  const scopeLabel = farmIds && farmIds.length > 0
+    ? `${province || ''} ${city || ''} · 我的养殖场`
+    : role === 'national'
+      ? (selectedProvince === '全国' ? '全国' : selectedProvince)
+      : province
+        ? city ? `${province} · ${city}` : province
+        : '全国';
+
+  const canSwitchProvince = role === 'national';
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -250,18 +266,20 @@ export default function Dashboard() {
           <p className="text-sm text-gray-500 mt-0.5">实时监测{scopeLabel}水产养殖环境与病害情况</p>
         </div>
         <div className="flex items-center gap-3">
-          <div className="relative">
-            <select
-              value={selectedProvince}
-              onChange={(e) => setSelectedProvince(e.target.value)}
-              className="appearance-none bg-white border border-gray-200 rounded-lg px-4 py-2 pr-8 text-sm focus:border-ocean-500 focus:ring-2 focus:ring-ocean-100 outline-none cursor-pointer"
-            >
-              {availableProvinces.map((p) => (
-                <option key={p} value={p}>{p}</option>
-              ))}
-            </select>
-            <ChevronRight className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 rotate-90 pointer-events-none" />
-          </div>
+          {canSwitchProvince && (
+            <div className="relative">
+              <select
+                value={selectedProvince}
+                onChange={(e) => setSelectedProvince(e.target.value)}
+                className="appearance-none bg-white border border-gray-200 rounded-lg px-4 py-2 pr-8 text-sm focus:border-ocean-500 focus:ring-2 focus:ring-ocean-100 outline-none cursor-pointer"
+              >
+                {availableProvinces.map((p) => (
+                  <option key={p} value={p}>{p}</option>
+                ))}
+              </select>
+              <ChevronRight className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 rotate-90 pointer-events-none" />
+            </div>
+          )}
           <div className="relative">
             <select
               value={selectedSpecies}

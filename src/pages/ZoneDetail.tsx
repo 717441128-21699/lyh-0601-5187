@@ -20,15 +20,12 @@ import { cn, formatDate, formatNumber, formatPercent, formatDateTime, getStatusC
 export default function ZoneDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { getZoneById, getZonePonds, getZoneWaterQuality, getZoneDiseases, filterZonesByScope } = useDataStore();
+  const { getZoneById, getZonePonds, getZoneWaterQuality, getZoneDiseases, canAccessZone } = useDataStore();
   const { user } = useAuthStore();
 
-  const scopedZoneIds = useMemo(() => {
-    return new Set(filterZonesByScope(user?.role || 'national', user?.province, user?.city).map((z) => z.id));
-  }, [filterZonesByScope, user]);
+  const canAccess = canAccessZone(id || '', user?.role || 'national', user?.province, user?.city, user?.farmIds);
 
   const zone = getZoneById(id || '');
-  const canAccess = zone && scopedZoneIds.has(zone.id);
   const ponds = getZonePonds(id || '');
   const waterQuality = getZoneWaterQuality(id || '');
   const diseases = getZoneDiseases(id || '');

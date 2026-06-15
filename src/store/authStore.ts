@@ -28,6 +28,7 @@ export const useAuthStore = create<AuthState>()(
             role,
             province: role !== 'national' ? '江苏' : undefined,
             city: role === 'municipal' || role === 'farmer' || role === 'technician' ? '苏州' : undefined,
+            farmIds: role === 'farmer' ? ['zone-0-0'] : undefined,
             permissions: ['*'],
           };
           set({ user, isAuthenticated: true });

@@ -24,7 +24,7 @@ export default function Reports() {
   const { user } = useAuthStore();
 
   const scopedReports = useMemo(
-    () => filterReportsByScope(user?.role || 'national', user?.province, user?.city),
+    () => filterReportsByScope(user?.role || 'national', user?.province, user?.city, undefined, user?.farmIds),
     [filterReportsByScope, user]
   );
 
@@ -157,11 +157,13 @@ export default function Reports() {
     };
   }, [selected]);
 
-  const scopeLabel = user?.role === 'national'
-    ? '全国'
-    : user?.province
-      ? user?.city ? `${user.province} · ${user.city}` : user.province
-      : '全国';
+  const scopeLabel = user?.farmIds && user.farmIds.length > 0
+    ? `${user.province || ''} ${user.city || ''} · 我的养殖场`
+    : user?.role === 'national'
+      ? '全国'
+      : user?.province
+        ? user?.city ? `${user.province} · ${user.city}` : user.province
+        : '全国';
 
   if (!selected) {
     return (

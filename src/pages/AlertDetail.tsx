@@ -28,7 +28,7 @@ import { cn, formatDateTime, fromNow, getAlertStatusStyle } from '../utils';
 export default function AlertDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { alerts, confirmAlert, reviewAlert, approveAlert, startMeasure, closeAlert, getZoneById } = useDataStore();
+  const { alerts, confirmAlert, reviewAlert, approveAlert, startMeasure, closeAlert, getZoneById, canAccessZone } = useDataStore();
   const { user } = useAuthStore();
 
   const alert = alerts.find((a) => a.id === id);
@@ -37,10 +37,28 @@ export default function AlertDetail() {
   const [measureDesc, setMeasureDesc] = useState('');
   const [measureType, setMeasureType] = useState<'aeration' | 'isolation'>('aeration');
 
+  // 权限检查：该预警对应的养殖区是否在当前用户管辖范围内
+  const canAccess = alert
+    ? canAccessZone(alert.zoneId, user?.role || 'national', user?.province, user?.city, user?.farmIds)
+    : false;
+
   if (!alert) {
     return (
       <div className="text-center py-16 text-gray-500">
         未找到该预警信息
+        <button onClick={() => navigate('/alerts')} className="block mx-auto mt-4 text-ocean-600">
+          返回预警中心
+        </button>
+      </div>
+    );
+  }
+
+  if (!canAccess) {
+    return (
+      <div className="text-center py-16 text-gray-500">
+        <Shield className="w-12 h-12 mx-auto mb-3 text-gray-300" />
+        <div className="text-lg font-medium">无权限查看该预警</div>
+        <div className="text-sm mt-1">该预警不在您管辖范围内</div>
         <button onClick={() => navigate('/alerts')} className="block mx-auto mt-4 text-ocean-600">
           返回预警中心
         </button>

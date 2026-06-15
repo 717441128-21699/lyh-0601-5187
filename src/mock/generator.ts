@@ -56,6 +56,7 @@ export const mockUsers: User[] = [
     role: 'farmer',
     province: '江苏',
     city: '苏州',
+    farmIds: ['zone-0-0'],
     permissions: ['farm:view', 'alert:confirm', 'feed:manage'],
   },
   {

@@ -6,6 +6,7 @@ export interface User {
   role: UserRole;
   province?: string;
   city?: string;
+  farmIds?: string[];
   avatar?: string;
   permissions: string[];
 }

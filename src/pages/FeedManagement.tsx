@@ -43,15 +43,15 @@ export default function FeedManagement() {
 
   // 按权限范围过滤
   const scopedZones = useMemo(
-    () => filterZonesByScope(user?.role || 'national', user?.province, user?.city),
+    () => filterZonesByScope(user?.role || 'national', user?.province, user?.city, undefined, user?.farmIds),
     [filterZonesByScope, user]
   );
   const scopedPlans = useMemo(
-    () => filterPlansByScope(user?.role || 'national', user?.province, user?.city),
+    () => filterPlansByScope(user?.role || 'national', user?.province, user?.city, user?.farmIds),
     [filterPlansByScope, user]
   );
   const scopedRecords = useMemo(
-    () => filterRecordsByScope(user?.role || 'national', user?.province, user?.city),
+    () => filterRecordsByScope(user?.role || 'national', user?.province, user?.city, user?.farmIds),
     [filterRecordsByScope, user]
   );
 
@@ -213,11 +213,13 @@ export default function FeedManagement() {
     });
   };
 
-  const scopeLabel = user?.role === 'national'
-    ? '全国'
-    : user?.province
-      ? user?.city ? `${user.province} · ${user.city}` : user.province
-      : '全国';
+  const scopeLabel = user?.farmIds && user.farmIds.length > 0
+    ? `${user.province || ''} ${user.city || ''} · 我的养殖场`
+    : user?.role === 'national'
+      ? '全国'
+      : user?.province
+        ? user?.city ? `${user.province} · ${user.city}` : user.province
+        : '全国';
 
   return (
     <div className="space-y-6 animate-fade-in">
