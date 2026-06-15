@@ -125,6 +125,7 @@ export interface FeedFormula {
 export interface FeedingPlan {
   id: string;
   zoneId: string;
+  zoneName: string;
   pondId: string;
   pondName: string;
   formulaId: string;
@@ -138,8 +139,10 @@ export interface FeedingPlan {
 export interface FeedingRecord {
   id: string;
   planId: string;
+  zoneName: string;
   date: string;
   pondName: string;
+  formulaName: string;
   recommendedAmount: number;
   actualAmount: number;
   deviation: number;

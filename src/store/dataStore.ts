@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import {
   FarmZone,
   Pond,
@@ -13,13 +14,13 @@ import {
   OverviewStats,
   ApprovalStep,
   ThresholdConfig,
+  UserRole,
 } from '../types';
 import {
   generateMockZones,
   generateMockPonds,
   generateWaterQualityHistory,
   generateDiseaseRecords,
-  generateMockAlerts,
   generateFeedFormulas,
   generateFeedingPlans,
   generateFeedingRecords,
@@ -28,6 +29,99 @@ import {
   generateOverviewStats,
 } from '../mock/generator';
 import dayjs from 'dayjs';
+
+// 基于水质和病害数据检测预警
+function detectAlertsFromData(
+  zones: FarmZone[],
+  waterQuality: Record<string, WaterQuality[]>,
+  diseases: Record<string, DiseaseRecord[]>,
+  thresholds: ThresholdConfig,
+  existingAlerts: Alert[] = []
+): Alert[] {
+  const alerts: Alert[] = [];
+  const existingZoneIds = new Set(existingAlerts.map((a) => a.zoneId));
+
+  zones.forEach((zone) => {
+    // 跳过已经有预警的区域（避免重复）
+    if (existingZoneIds.has(zone.id)) {
+      const existing = existingAlerts.find((a) => a.zoneId === zone.id);
+      if (existing && existing.status !== 'false_alarm' && existing.status !== 'closed') {
+        alerts.push(existing);
+        return;
+      }
+    }
+
+    // 规则1：连续6小时溶解氧低于阈值
+    const wqData = waterQuality[zone.id] || [];
+    const recentData = wqData
+      .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+      .slice(0, 12); // 最近约36小时(每3小时一条)
+
+    let lowDoCount = 0;
+    for (const d of recentData) {
+      if (d.dissolvedOxygen < thresholds.dissolvedOxygenMin) lowDoCount++;
+      else break;
+    }
+    const doTriggered = lowDoCount >= 2; // 至少连续2个采样点(6小时)低于阈值
+
+    // 规则2：连续3天病害率超过阈值
+    const disData = diseases[zone.id] || [];
+    const recentDis = disData
+      .sort((a, b) => b.date.localeCompare(a.date))
+      .slice(0, 3);
+    const diseaseTriggered =
+      recentDis.length >= 3 &&
+      recentDis.every((d) => d.rate > thresholds.diseaseRateMax);
+
+    if (doTriggered || diseaseTriggered) {
+      const affectedPonds = Object.values(existingAlerts.find((a) => a.zoneId === zone.id)?.affectedPonds || []) as any;
+
+      const type: Alert['type'] = doTriggered ? 'dissolved_oxygen' : 'disease';
+      const triggerReason = doTriggered
+        ? `连续${lowDoCount * 3}小时溶解氧低于${thresholds.dissolvedOxygenMin}mg/L阈值`
+        : `连续3天病害率超过${thresholds.diseaseRateMax}%阈值`;
+
+      const approvalFlow: ApprovalStep[] = [
+        {
+          id: `ap-${zone.id}-1`,
+          level: 'farmer',
+          status: 'pending',
+          operator: '待确认',
+          operatorRole: '养殖户',
+        },
+        {
+          id: `ap-${zone.id}-2`,
+          level: 'fishery_station',
+          status: 'pending',
+          operator: '待复核',
+          operatorRole: '渔政站',
+        },
+        {
+          id: `ap-${zone.id}-3`,
+          level: 'provincial_bureau',
+          status: 'pending',
+          operator: '待批准',
+          operatorRole: '省级渔业局',
+        },
+      ];
+
+      alerts.push({
+        id: `alert-${zone.id}`,
+        zoneId: zone.id,
+        zoneName: zone.name,
+        level: 'primary',
+        type,
+        status: 'pending_confirm',
+        triggerReason,
+        triggeredAt: recentData[0]?.timestamp || dayjs().format('YYYY-MM-DD HH:mm:ss'),
+        affectedPonds: affectedPonds.length > 0 ? affectedPonds : [`pond-${zone.id}-1`, `pond-${zone.id}-2`],
+        approvalFlow,
+      });
+    }
+  });
+
+  return alerts.sort((a, b) => b.triggeredAt.localeCompare(a.triggeredAt));
+}
 
 interface DataState {
   zones: FarmZone[];
@@ -50,6 +144,16 @@ interface DataState {
   initData: () => void;
   setSelectedSpecies: (s: string) => void;
   setSelectedProvince: (p: string) => void;
+
+  // 数据过滤（按角色+省份+品种）
+  filterZonesByScope: (role: UserRole, province?: string, city?: string, species?: string) => FarmZone[];
+  filterAlertsByScope: (role: UserRole, province?: string, city?: string, species?: string) => Alert[];
+  filterReportsByScope: (role: UserRole, province?: string, city?: string, species?: string) => WeeklyReport[];
+  filterPlansByScope: (role: UserRole, province?: string, city?: string) => FeedingPlan[];
+  filterRecordsByScope: (role: UserRole, province?: string, city?: string) => FeedingRecord[];
+  computeOverviewStats: (role: UserRole, province?: string, city?: string, species?: string) => OverviewStats;
+  computeProvinceStats: (role: UserRole, province?: string, species?: string) => ProvinceStats[];
+
   getZoneById: (id: string) => FarmZone | undefined;
   getZonePonds: (zoneId: string) => Pond[];
   getZoneWaterQuality: (zoneId: string) => WaterQuality[];
@@ -62,159 +166,318 @@ interface DataState {
   closeAlert: (alertId: string) => void;
 
   addFormula: (formula: Omit<FeedFormula, 'id' | 'uploadedBy' | 'uploadedAt'>) => void;
+  addFeedingPlan: (plan: Omit<FeedingPlan, 'id'>) => void;
+  addFeedingPlansBatch: (plans: Omit<FeedingPlan, 'id'>[]) => void;
+  addFeedingRecord: (record: Omit<FeedingRecord, 'id'>) => void;
+  updateThresholds: (t: Partial<ThresholdConfig>) => void;
 }
 
-export const useDataStore = create<DataState>((set, get) => ({
-  zones: [],
-  ponds: {},
-  waterQuality: {},
-  diseases: {},
-  alerts: [],
-  formulas: [],
-  feedingPlans: [],
-  feedingRecords: [],
-  reports: [],
-  provinceStats: [],
-  overview: {
-    totalFarms: 0,
-    avgWaterQualityPassRate: 0,
-    avgDiseaseRate: 0,
-    estimatedTotalYield: 0,
-    avgSurvivalRate: 0,
-    activeAlerts: 0,
-    todayNewAlerts: 0,
-  },
-  thresholds: {
-    dissolvedOxygenMin: 4.0,
-    phMin: 6.5,
-    phMax: 9.0,
-    ammoniaNitrogenMax: 0.5,
-    temperatureMin: 15,
-    temperatureMax: 32,
-    diseaseRateMax: 5,
-    feedDeviationMax: 20,
-  },
-  selectedSpecies: '全部',
-  selectedProvince: '全国',
-  loading: true,
+export const useDataStore = create<DataState>()(
+  persist(
+    (set, get) => ({
+      zones: [],
+      ponds: {},
+      waterQuality: {},
+      diseases: {},
+      alerts: [],
+      formulas: [],
+      feedingPlans: [],
+      feedingRecords: [],
+      reports: [],
+      provinceStats: [],
+      overview: {
+        totalFarms: 0,
+        avgWaterQualityPassRate: 0,
+        avgDiseaseRate: 0,
+        estimatedTotalYield: 0,
+        avgSurvivalRate: 0,
+        activeAlerts: 0,
+        todayNewAlerts: 0,
+      },
+      thresholds: {
+        dissolvedOxygenMin: 4.0,
+        phMin: 6.5,
+        phMax: 9.0,
+        ammoniaNitrogenMax: 0.5,
+        temperatureMin: 15,
+        temperatureMax: 32,
+        diseaseRateMax: 5,
+        feedDeviationMax: 20,
+      },
+      selectedSpecies: '全部',
+      selectedProvince: '全国',
+      loading: true,
 
-  initData: () => {
-    const zones = generateMockZones();
-    const pondsMap: Record<string, Pond[]> = {};
-    const wqMap: Record<string, WaterQuality[]> = {};
-    const disMap: Record<string, DiseaseRecord[]> = {};
-    const allPlans: FeedingPlan[] = [];
-    const allRecords: FeedingRecord[] = [];
+      initData: () => {
+        const zones = generateMockZones();
+        const pondsMap: Record<string, Pond[]> = {};
+        const wqMap: Record<string, WaterQuality[]> = {};
+        const disMap: Record<string, DiseaseRecord[]> = {};
+        const allPlans: FeedingPlan[] = [];
+        const allRecords: FeedingRecord[] = [];
 
-    zones.forEach((z) => {
-      const ponds = generateMockPonds(z.id, z.pondCount);
-      pondsMap[z.id] = ponds;
-      wqMap[z.id] = generateWaterQualityHistory(z.id);
-      disMap[z.id] = generateDiseaseRecords(z.id);
-      const plans = generateFeedingPlans(z.id, ponds);
-      allPlans.push(...plans);
-      allRecords.push(...generateFeedingRecords(plans));
-    });
-
-    set({
-      zones,
-      ponds: pondsMap,
-      waterQuality: wqMap,
-      diseases: disMap,
-      alerts: generateMockAlerts(zones),
-      formulas: generateFeedFormulas(),
-      feedingPlans: allPlans,
-      feedingRecords: allRecords,
-      reports: generateWeeklyReports(zones),
-      provinceStats: generateProvinceStats(),
-      overview: generateOverviewStats(),
-      loading: false,
-    });
-  },
-
-  setSelectedSpecies: (s) => set({ selectedSpecies: s }),
-  setSelectedProvince: (p) => set({ selectedProvince: p }),
-
-  getZoneById: (id) => get().zones.find((z) => z.id === id),
-  getZonePonds: (zoneId) => get().ponds[zoneId] || [],
-  getZoneWaterQuality: (zoneId) => get().waterQuality[zoneId] || [],
-  getZoneDiseases: (zoneId) => get().diseases[zoneId] || [],
-
-  _updateApprovalStep: (alertId: string, level: ApprovalStep['level'], status: 'approved' | 'rejected', opinion: string, operatorName: string, operatorRole: string) => {
-    set({
-      alerts: get().alerts.map((a) => {
-        if (a.id !== alertId) return a;
-        const now = dayjs().format('YYYY-MM-DD HH:mm:ss');
-        const newFlow = a.approvalFlow.map((step) => {
-          if (step.level !== level) return step;
-          return { ...step, status, opinion, operator: operatorName, operatorRole, operatedAt: now };
+        zones.forEach((z) => {
+          const ponds = generateMockPonds(z.id, z.pondCount);
+          pondsMap[z.id] = ponds;
+          wqMap[z.id] = generateWaterQualityHistory(z.id);
+          disMap[z.id] = generateDiseaseRecords(z.id);
+          const plans = generateFeedingPlans(z.id, z.name, ponds);
+          allPlans.push(...plans);
+          allRecords.push(...generateFeedingRecords(plans));
         });
 
-        let newStatus = a.status;
-        if (status === 'rejected') {
-          newStatus = 'false_alarm';
-        } else if (level === 'farmer') {
-          newStatus = 'pending_review';
-        } else if (level === 'fishery_station') {
-          newStatus = 'pending_approve';
-        } else if (level === 'provincial_bureau') {
-          newStatus = 'processing';
+        const thresholds = get().thresholds;
+        const alerts = detectAlertsFromData(zones, wqMap, disMap, thresholds, []);
+
+        set({
+          zones,
+          ponds: pondsMap,
+          waterQuality: wqMap,
+          diseases: disMap,
+          alerts,
+          formulas: generateFeedFormulas(),
+          feedingPlans: allPlans,
+          feedingRecords: allRecords,
+          reports: generateWeeklyReports(zones),
+          provinceStats: generateProvinceStats(),
+          overview: generateOverviewStats(),
+          loading: false,
+        });
+      },
+
+      setSelectedSpecies: (s) => set({ selectedSpecies: s }),
+      setSelectedProvince: (p) => set({ selectedProvince: p }),
+
+      // 按管辖范围和品种筛选养殖区
+      filterZonesByScope: (role, province, city, species) => {
+        const zones = get().zones;
+        let result = zones;
+        if (role === 'provincial' && province) {
+          result = result.filter((z) => z.province === province);
+        } else if ((role === 'municipal' || role === 'farmer' || role === 'technician') && city) {
+          result = result.filter((z) => z.city === city);
+        } else if (role === 'municipal' && province) {
+          result = result.filter((z) => z.province === province);
         }
+        if (species && species !== '全部') {
+          result = result.filter((z) => z.species.includes(species));
+        }
+        return result;
+      },
 
-        return { ...a, approvalFlow: newFlow, status: newStatus };
-      }),
-    });
-  },
+      filterAlertsByScope: (role, province, city, species) => {
+        const filteredZones = get().filterZonesByScope(role, province, city, species);
+        const zoneIds = new Set(filteredZones.map((z) => z.id));
+        return get().alerts.filter((a) => zoneIds.has(a.zoneId));
+      },
 
-  confirmAlert: (alertId, opinion, confirmed) => {
-    get()._updateApprovalStep(alertId, 'farmer', confirmed ? 'approved' : 'rejected', opinion, '陈老板', '养殖户');
-  },
+      filterReportsByScope: (role, province, city, species) => {
+        const filteredZones = get().filterZonesByScope(role, province, city, species);
+        const zoneIds = new Set(filteredZones.map((z) => z.id));
+        return get().reports.filter((r) => zoneIds.has(r.zoneId));
+      },
 
-  reviewAlert: (alertId, opinion, approved) => {
-    get()._updateApprovalStep(alertId, 'fishery_station', approved ? 'approved' : 'rejected', opinion, '张站长', '渔政站');
-  },
+      filterPlansByScope: (role, province, city) => {
+        const filteredZones = get().filterZonesByScope(role, province, city);
+        const zoneIds = new Set(filteredZones.map((z) => z.id));
+        return get().feedingPlans.filter((p) => zoneIds.has(p.zoneId));
+      },
 
-  approveAlert: (alertId, opinion, approved) => {
-    get()._updateApprovalStep(alertId, 'provincial_bureau', approved ? 'approved' : 'rejected', opinion, '王局长', '省级渔业局');
-  },
+      filterRecordsByScope: (role, province, city) => {
+        const plans = get().filterPlansByScope(role, province, city);
+        const planIds = new Set(plans.map((p) => p.id));
+        return get().feedingRecords.filter((r) => planIds.has(r.planId));
+      },
 
-  startMeasure: (alertId, type, description) => {
-    set({
-      alerts: get().alerts.map((a) => {
-        if (a.id !== alertId) return a;
-        const measure = {
-          id: `ms-${Date.now()}`,
-          type,
-          description,
-          operator: '陈老板',
-          startTime: dayjs().format('YYYY-MM-DD HH:mm:ss'),
-        };
+      // 计算范围统计
+      computeOverviewStats: (role, province, city, species) => {
+        const zones = get().filterZonesByScope(role, province, city, species);
+        const allWq = zones.flatMap((z) => get().waterQuality[z.id] || []);
+        const allDis = zones.flatMap((z) => get().diseases[z.id] || []);
+        const alerts = get().filterAlertsByScope(role, province, city, species);
+
+        const doPass = allWq.filter((w) => w.dissolvedOxygen >= get().thresholds.dissolvedOxygenMin).length;
+        const passRate = allWq.length > 0 ? (doPass / allWq.length) * 100 : 0;
+        const avgDis = allDis.length > 0 ? allDis.reduce((s, d) => s + d.rate, 0) / allDis.length : 0;
+        const active = alerts.filter((a) => a.status !== 'closed' && a.status !== 'false_alarm').length;
+        const today = alerts.filter((a) => dayjs(a.triggeredAt).isSame(dayjs(), 'day')).length;
+
+        // 产量按面积估算
+        const totalArea = zones.reduce((s, z) => s + z.totalArea, 0);
+        const yieldPerMu = species === '全部' ? 0.8 : (['南美白对虾', '海参', '鲍鱼'].includes(species!) ? 1.5 : 0.6);
+        const estimatedYield = Math.floor(totalArea * yieldPerMu);
+
         return {
-          ...a,
-          status: 'processing',
-          measures: [...(a.measures || []), measure],
+          totalFarms: zones.length,
+          avgWaterQualityPassRate: Math.round(passRate * 10) / 10,
+          avgDiseaseRate: Math.round(avgDis * 10) / 10,
+          estimatedTotalYield: estimatedYield,
+          avgSurvivalRate: zones.length > 0 ? Math.round((85 + Math.random() * 10) * 10) / 10 : 0,
+          activeAlerts: active,
+          todayNewAlerts: today,
         };
-      }),
-    });
-  },
+      },
 
-  closeAlert: (alertId) => {
-    set({
-      alerts: get().alerts.map((a) => (a.id === alertId ? { ...a, status: 'closed' } : a)),
-    });
-  },
+      computeProvinceStats: (role, province, species) => {
+        const allStats = get().provinceStats;
+        if (role === 'provincial' && province) {
+          return allStats.filter((s) => s.province === province);
+        }
+        if (role !== 'national') return allStats.slice(0, 5);
 
-  addFormula: (formula) => {
-    set({
-      formulas: [
-        ...get().formulas,
-        {
-          ...formula,
-          id: `f-${Date.now()}`,
-          uploadedBy: '当前用户',
-          uploadedAt: dayjs().format('YYYY-MM-DD'),
-        },
-      ],
-    });
-  },
-}));
+        // 按品种调整产量
+        if (species && species !== '全部') {
+          const factor = ['南美白对虾', '海参', '鲍鱼'].includes(species) ? 1.3 : 0.7;
+          return allStats.map((s) => ({
+            ...s,
+            estimatedYield: Math.floor(s.estimatedYield * factor),
+            farmCount: Math.floor(s.farmCount * 0.6),
+          }));
+        }
+        return allStats;
+      },
+
+      getZoneById: (id) => get().zones.find((z) => z.id === id),
+      getZonePonds: (zoneId) => get().ponds[zoneId] || [],
+      getZoneWaterQuality: (zoneId) => get().waterQuality[zoneId] || [],
+      getZoneDiseases: (zoneId) => get().diseases[zoneId] || [],
+
+      _updateApprovalStep: (alertId, level, status, opinion, operatorName, operatorRole) => {
+        set({
+          alerts: get().alerts.map((a) => {
+            if (a.id !== alertId) return a;
+            // 如果上一级被驳回，则后续不再流转
+            const now = dayjs().format('YYYY-MM-DD HH:mm:ss');
+            const newFlow = a.approvalFlow.map((step) => {
+              if (step.level !== level) return step;
+              return { ...step, status, opinion, operator: operatorName, operatorRole, operatedAt: now };
+            });
+
+            let newStatus = a.status;
+            if (status === 'rejected') {
+              newStatus = 'false_alarm';
+            } else if (level === 'farmer') {
+              newStatus = 'pending_review';
+            } else if (level === 'fishery_station') {
+              newStatus = 'pending_approve';
+            } else if (level === 'provincial_bureau') {
+              newStatus = 'processing';
+            }
+
+            return { ...a, approvalFlow: newFlow, status: newStatus };
+          }),
+        });
+      },
+
+      confirmAlert: (alertId, opinion, confirmed) => {
+        get()._updateApprovalStep(alertId, 'farmer', confirmed ? 'approved' : 'rejected', opinion, '陈老板', '养殖户');
+      },
+
+      reviewAlert: (alertId, opinion, approved) => {
+        get()._updateApprovalStep(alertId, 'fishery_station', approved ? 'approved' : 'rejected', opinion, '张站长', '渔政站');
+      },
+
+      approveAlert: (alertId, opinion, approved) => {
+        get()._updateApprovalStep(alertId, 'provincial_bureau', approved ? 'approved' : 'rejected', opinion, '王局长', '省级渔业局');
+      },
+
+      startMeasure: (alertId, type, description) => {
+        set({
+          alerts: get().alerts.map((a) => {
+            if (a.id !== alertId) return a;
+            const measure = {
+              id: `ms-${Date.now()}`,
+              type,
+              description,
+              operator: '陈老板',
+              startTime: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+            };
+            return {
+              ...a,
+              measures: [...(a.measures || []), measure],
+            };
+          }),
+        });
+      },
+
+      closeAlert: (alertId) => {
+        set({
+          alerts: get().alerts.map((a) => (a.id === alertId ? { ...a, status: 'closed' } : a)),
+        });
+      },
+
+      addFormula: (formula) => {
+        set({
+          formulas: [
+            ...get().formulas,
+            {
+              ...formula,
+              id: `f-${Date.now()}`,
+              uploadedBy: '当前用户',
+              uploadedAt: dayjs().format('YYYY-MM-DD'),
+            },
+          ],
+        });
+      },
+
+      addFeedingPlan: (plan) => {
+        set({
+          feedingPlans: [
+            ...get().feedingPlans,
+            { ...plan, id: `fp-${Date.now()}` },
+          ],
+        });
+      },
+
+      addFeedingPlansBatch: (plans) => {
+        const newPlans = plans.map((p, i) => ({ ...p, id: `fp-${Date.now()}-${i}` }));
+        // 同时生成对应异常检测记录
+        const newRecords: FeedingRecord[] = newPlans.flatMap((plan) => {
+          const records: FeedingRecord[] = [];
+          for (let d = 0; d < 3; d++) {
+            const actual = plan.dailyAmount * (0.75 + Math.random() * 0.5);
+            const deviation = Math.round(((actual - plan.dailyAmount) / plan.dailyAmount) * 1000) / 10;
+            records.push({
+              id: `fr-${plan.id}-${d}`,
+              planId: plan.id,
+              zoneName: plan.zoneName,
+              date: dayjs().subtract(d, 'day').format('YYYY-MM-DD'),
+              pondName: plan.pondName,
+              formulaName: plan.formulaName,
+              recommendedAmount: plan.dailyAmount,
+              actualAmount: Math.round(actual * 10) / 10,
+              deviation,
+              isAbnormal: Math.abs(deviation) > get().thresholds.feedDeviationMax,
+            });
+          }
+          return records;
+        });
+        set({
+          feedingPlans: [...get().feedingPlans, ...newPlans],
+          feedingRecords: [...newRecords, ...get().feedingRecords],
+        });
+      },
+
+      addFeedingRecord: (record) => {
+        set({
+          feedingRecords: [
+            { ...record, id: `fr-${Date.now()}` },
+            ...get().feedingRecords,
+          ],
+        });
+      },
+
+      updateThresholds: (t) => {
+        set({
+          thresholds: { ...get().thresholds, ...t },
+        });
+        // 更新阈值后重新检测预警
+        const { zones, waterQuality, diseases, thresholds, alerts } = get();
+        set({
+          alerts: detectAlertsFromData(zones, waterQuality, diseases, thresholds, alerts),
+        });
+      },
+    }),
+    { name: 'aquaculture-data' }
+  )
+);

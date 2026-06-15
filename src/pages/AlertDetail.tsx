@@ -51,9 +51,11 @@ export default function AlertDetail() {
   const canConfirm = user?.role === 'farmer' && alert.status === 'pending_confirm';
   const canReview = user?.role === 'municipal' && alert.status === 'pending_review';
   const canApprove = user?.role === 'provincial' && alert.status === 'pending_approve';
-  const canStartMeasure = (user?.role === 'farmer' || user?.role === 'municipal') &&
-    (alert.status === 'processing' || alert.status === 'pending_approve');
-  const canClose = user?.role === 'national' || user?.role === 'provincial';
+  const isRejected = alert.approvalFlow.some((s) => s.status === 'rejected');
+  const canStartMeasure = !isRejected &&
+    alert.status === 'processing' &&
+    (user?.role === 'farmer' || user?.role === 'municipal');
+  const canClose = (user?.role === 'national' || user?.role === 'provincial') && alert.status === 'processing';
 
   const approvalLevels = [
     {

@@ -246,10 +246,11 @@ export const generateFeedFormulas = (): FeedFormula[] => [
   },
 ];
 
-export const generateFeedingPlans = (zoneId: string, ponds: Pond[]): FeedingPlan[] => {
+export const generateFeedingPlans = (zoneId: string, zoneName: string, ponds: Pond[]): FeedingPlan[] => {
   return ponds.slice(0, 3).map((p, i) => ({
     id: `fp-${zoneId}-${i}`,
     zoneId,
+    zoneName,
     pondId: p.id,
     pondName: p.name,
     formulaId: i % 2 === 0 ? 'f1' : 'f2',
@@ -269,8 +270,10 @@ export const generateFeedingRecords = (plans: FeedingPlan[]): FeedingRecord[] =>
       records.push({
         id: `fr-${plan.id}-${d}`,
         planId: plan.id,
+        zoneName: plan.zoneName,
         date: dayjs().subtract(d, 'day').format('YYYY-MM-DD'),
         pondName: plan.pondName,
+        formulaName: plan.formulaName,
         recommendedAmount: plan.dailyAmount,
         actualAmount: Math.round(actual * 10) / 10,
         deviation: Math.round(deviation * 10) / 10,

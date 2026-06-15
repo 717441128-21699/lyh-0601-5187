@@ -5,7 +5,6 @@ import {
   FileText,
   Calendar,
   TrendingUp,
-  TrendingDown,
   ArrowUpRight,
   ArrowDownRight,
   Download,
@@ -17,12 +16,20 @@ import {
 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import { useDataStore } from '../store/dataStore';
-import { cn, formatDate, formatNumber, formatPercent, getTrendColor } from '../utils';
+import { useAuthStore } from '../store/authStore';
+import { cn, formatDate, formatPercent, getTrendColor } from '../utils';
 
 export default function Reports() {
-  const { reports } = useDataStore();
-  const [selectedId, setSelectedId] = useState(reports[0]?.id || '');
-  const selected = reports.find((r) => r.id === selectedId) || reports[0];
+  const { filterReportsByScope } = useDataStore();
+  const { user } = useAuthStore();
+
+  const scopedReports = useMemo(
+    () => filterReportsByScope(user?.role || 'national', user?.province, user?.city),
+    [filterReportsByScope, user]
+  );
+
+  const [selectedId, setSelectedId] = useState(scopedReports[0]?.id || '');
+  const selected = scopedReports.find((r) => r.id === selectedId) || scopedReports[0];
 
   const survivalChart = useMemo(() => {
     if (!selected) return {};
@@ -150,6 +157,12 @@ export default function Reports() {
     };
   }, [selected]);
 
+  const scopeLabel = user?.role === 'national'
+    ? '全国'
+    : user?.province
+      ? user?.city ? `${user.province} · ${user.city}` : user.province
+      : '全国';
+
   if (!selected) {
     return (
       <div className="text-center py-16 text-gray-500">
@@ -163,7 +176,7 @@ export default function Reports() {
     <div className="space-y-6 animate-fade-in">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-xl font-serif font-bold text-ink-900">养殖健康诊断报告</h2>
+          <h2 className="text-xl font-serif font-bold text-ink-900">养殖健康诊断报告 · {scopeLabel}</h2>
           <p className="text-sm text-gray-500 mt-0.5">每周自动生成，包含成活率、水质与病害分析及优化建议</p>
         </div>
         <button className="px-4 py-2 rounded-lg bg-ocean-600 text-white text-sm font-medium hover:bg-ocean-700 flex items-center gap-2">
@@ -173,11 +186,10 @@ export default function Reports() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-        {/* 左侧：报告列表 */}
         <div className="lg:col-span-1">
           <Card title="历史周报">
             <div className="space-y-2">
-              {reports.map((r) => (
+              {scopedReports.map((r) => (
                 <div
                   key={r.id}
                   onClick={() => setSelectedId(r.id)}
@@ -202,13 +214,14 @@ export default function Reports() {
                   </div>
                 </div>
               ))}
+              {scopedReports.length === 0 && (
+                <div className="text-center py-6 text-gray-400 text-sm">当前范围暂无报告</div>
+              )}
             </div>
           </Card>
         </div>
 
-        {/* 右侧：报告详情 */}
         <div className="lg:col-span-3 space-y-6">
-          {/* 报告头部 */}
           <Card>
             <div className="flex items-start justify-between">
               <div>
@@ -276,7 +289,6 @@ export default function Reports() {
             </div>
           </Card>
 
-          {/* 分析图表 */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <Card title="成活率对比" subtitle="本周 vs 上周 vs 去年同期">
               <ReactECharts option={survivalChart} style={{ height: 260 }} />
@@ -286,7 +298,6 @@ export default function Reports() {
             </Card>
           </div>
 
-          {/* 病害分布 + 优化建议 */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <Card title="病害类型分布" subtitle="本周统计">
               <ReactECharts option={diseaseChart} style={{ height: 260 }} />

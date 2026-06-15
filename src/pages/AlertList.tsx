@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import { useDataStore } from '../store/dataStore';
+import { useAuthStore } from '../store/authStore';
 import { AlertStatus, ALERT_STATUS_LABELS, ALERT_TYPE_LABELS } from '../types';
 import { cn, fromNow, getAlertStatusStyle, formatDate } from '../utils';
 
@@ -26,35 +27,46 @@ const STATUS_FILTERS: { value: AlertStatus | 'all'; label: string }[] = [
 
 export default function AlertList() {
   const navigate = useNavigate();
-  const { alerts } = useDataStore();
+  const { filterAlertsByScope } = useDataStore();
+  const { user } = useAuthStore();
   const [statusFilter, setStatusFilter] = useState<AlertStatus | 'all'>('all');
   const [typeFilter, setTypeFilter] = useState<'all' | 'dissolved_oxygen' | 'disease'>('all');
   const [search, setSearch] = useState('');
 
+  const scopedAlerts = useMemo(
+    () => filterAlertsByScope(user?.role || 'national', user?.province, user?.city),
+    [filterAlertsByScope, user]
+  );
+
   const filtered = useMemo(() => {
-    return alerts.filter((a) => {
+    return scopedAlerts.filter((a) => {
       if (statusFilter !== 'all' && a.status !== statusFilter) return false;
       if (typeFilter !== 'all' && a.type !== typeFilter) return false;
       if (search && !a.zoneName.includes(search)) return false;
       return true;
     }).sort((a, b) => b.triggeredAt.localeCompare(a.triggeredAt));
-  }, [alerts, statusFilter, typeFilter, search]);
+  }, [scopedAlerts, statusFilter, typeFilter, search]);
 
   const stats = useMemo(() => ({
-    total: alerts.length,
-    pending: alerts.filter((a) => ['pending_confirm', 'pending_review', 'pending_approve'].includes(a.status)).length,
-    processing: alerts.filter((a) => a.status === 'processing').length,
-    today: alerts.filter((a) => formatDate(a.triggeredAt) === formatDate(new Date().toISOString())).length,
-  }), [alerts]);
+    total: scopedAlerts.length,
+    pending: scopedAlerts.filter((a) => ['pending_confirm', 'pending_review', 'pending_approve'].includes(a.status)).length,
+    processing: scopedAlerts.filter((a) => a.status === 'processing').length,
+    today: scopedAlerts.filter((a) => formatDate(a.triggeredAt) === formatDate(new Date().toISOString())).length,
+  }), [scopedAlerts]);
+
+  const scopeLabel = user?.role === 'national'
+    ? '全国'
+    : user?.province
+      ? user?.city ? `${user.province} · ${user.city}` : user.province
+      : '全国';
 
   return (
     <div className="space-y-6 animate-fade-in">
       <div>
-        <h2 className="text-xl font-serif font-bold text-ink-900">预警中心</h2>
+        <h2 className="text-xl font-serif font-bold text-ink-900">预警中心 · {scopeLabel}</h2>
         <p className="text-sm text-gray-500 mt-0.5">水质异常与病害超标预警的全流程管理</p>
       </div>
 
-      {/* 统计卡片 */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {[
           { label: '预警总数', value: stats.total, icon: AlertTriangle, color: 'from-ocean-500 to-ocean-700' },
@@ -75,7 +87,6 @@ export default function AlertList() {
       </div>
 
       <Card>
-        {/* 筛选栏 */}
         <div className="flex flex-wrap items-center gap-4 mb-6">
           <div className="relative flex-1 min-w-[200px] max-w-sm">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -130,7 +141,6 @@ export default function AlertList() {
           </div>
         </div>
 
-        {/* 预警列表 */}
         <div className="space-y-3">
           {filtered.map((alert) => (
             <div

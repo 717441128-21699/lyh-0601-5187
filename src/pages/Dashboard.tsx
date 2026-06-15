@@ -20,7 +20,6 @@ import { useAuthStore } from '../store/authStore';
 import { SPECIES_OPTIONS, PROVINCE_OPTIONS, ALERT_STATUS_LABELS, ALERT_TYPE_LABELS } from '../types';
 import { cn, formatNumber, formatPercent, fromNow, getAlertStatusStyle, getWaterQualityColor } from '../utils';
 
-// 简化的中国省份数据（使用矩形模拟热力图区域）
 const CHINA_PROVINCES = PROVINCE_OPTIONS.slice(0, 20);
 
 function StatCard({
@@ -66,32 +65,48 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const { user } = useAuthStore();
   const {
-    overview,
-    provinceStats,
-    alerts,
     selectedSpecies,
     selectedProvince,
     setSelectedSpecies,
     setSelectedProvince,
-    zones,
+    computeOverviewStats,
+    computeProvinceStats,
+    filterZonesByScope,
+    filterAlertsByScope,
   } = useDataStore();
 
-  const filteredStats = useMemo(() => {
-    return provinceStats.filter(
-      (s) => selectedProvince === '全国' || s.province === selectedProvince
-    );
-  }, [provinceStats, selectedProvince]);
+  // 计算当前筛选和权限范围下的统计数据
+  const overview = useMemo(
+    () => computeOverviewStats(user?.role || 'national', user?.province, user?.city, selectedSpecies),
+    [computeOverviewStats, user, selectedSpecies]
+  );
+
+  const provinceStats = useMemo(
+    () => computeProvinceStats(user?.role || 'national', user?.province, selectedSpecies),
+    [computeProvinceStats, user, selectedSpecies]
+  );
+
+  const filteredZones = useMemo(
+    () => filterZonesByScope(user?.role || 'national', user?.province, user?.city, selectedSpecies),
+    [filterZonesByScope, user, selectedSpecies]
+  );
 
   const filteredAlerts = useMemo(() => {
-    return alerts
+    return filterAlertsByScope(user?.role || 'national', user?.province, user?.city, selectedSpecies)
       .filter((a) => a.status !== 'closed' && a.status !== 'false_alarm')
       .sort((a, b) => b.triggeredAt.localeCompare(a.triggeredAt))
       .slice(0, 6);
-  }, [alerts]);
+  }, [filterAlertsByScope, user, selectedSpecies]);
+
+  // 按省份筛选进一步过滤
+  const displayStats = useMemo(() => {
+    if (selectedProvince === '全国' || !selectedProvince) return provinceStats;
+    return provinceStats.filter((s) => s.province === selectedProvince);
+  }, [provinceStats, selectedProvince]);
 
   // 热力图配置
   const heatmapOption = useMemo(() => {
-    const data = filteredStats.map((s) => ({
+    const data = displayStats.map((s) => ({
       name: s.province,
       value: s.waterQualityPassRate,
       itemStyle: {
@@ -103,7 +118,7 @@ export default function Dashboard() {
       tooltip: {
         trigger: 'item',
         formatter: (params: any) => {
-          const stat = filteredStats.find((s) => s.province === params.name);
+          const stat = displayStats.find((s) => s.province === params.name);
           if (!stat) return params.name;
           return `
             <div style="padding:4px">
@@ -116,43 +131,31 @@ export default function Dashboard() {
           `;
         },
       },
-      visualMap: {
-        show: false,
-        min: 60,
-        max: 100,
-      },
+      visualMap: { show: false, min: 60, max: 100 },
       series: [
         {
           type: 'map',
           map: 'china',
           roam: false,
-          label: {
-            show: true,
-            color: '#fff',
-            fontSize: 10,
-          },
+          label: { show: true, color: '#fff', fontSize: 10 },
           itemStyle: {
             areaColor: '#D6ECF3',
             borderColor: '#fff',
             borderWidth: 1,
           },
           emphasis: {
-            itemStyle: {
-              areaColor: '#088395',
-            },
-            label: {
-              color: '#fff',
-            },
+            itemStyle: { areaColor: '#088395' },
+            label: { color: '#fff' },
           },
           data,
         },
       ],
     };
-  }, [filteredStats]);
+  }, [displayStats]);
 
   // 产量排名配置
   const rankingOption = useMemo(() => {
-    const sorted = [...filteredStats].sort((a, b) => b.estimatedYield - a.estimatedYield).slice(0, 10);
+    const sorted = [...displayStats].sort((a, b) => b.estimatedYield - a.estimatedYield).slice(0, 10);
     return {
       tooltip: {
         trigger: 'axis',
@@ -195,17 +198,16 @@ export default function Dashboard() {
             color: '#0A4D68',
             fontWeight: 600,
             fontSize: 11,
-            formatter: (p: any) => `${formatNumber(p.value / 10000, 1)}万`,
+            formatter: (p: any) => (p.value >= 10000 ? `${formatNumber(p.value / 10000, 1)}万` : formatNumber(p.value, 0)),
           },
         },
       ],
     };
-  }, [filteredStats]);
+  }, [displayStats]);
 
-  // 简单注册一个空地图（实际项目中应加载真实GeoJSON）
+  // 注册简化的中国地图
   useEffect(() => {
     if (!echarts.getMap('china')) {
-      // 创建一个简单的模拟地图（矩形网格）
       const geoJson: any = {
         type: 'FeatureCollection',
         features: CHINA_PROVINCES.map((name, i) => ({
@@ -213,15 +215,13 @@ export default function Dashboard() {
           properties: { name },
           geometry: {
             type: 'Polygon',
-            coordinates: [
-              [
-                [70 + (i % 5) * 20, 50 - Math.floor(i / 5) * 15],
-                [90 + (i % 5) * 20, 50 - Math.floor(i / 5) * 15],
-                [90 + (i % 5) * 20, 35 - Math.floor(i / 5) * 15],
-                [70 + (i % 5) * 20, 35 - Math.floor(i / 5) * 15],
-                [70 + (i % 5) * 20, 50 - Math.floor(i / 5) * 15],
-              ],
-            ],
+            coordinates: [[
+              [70 + (i % 5) * 20, 50 - Math.floor(i / 5) * 15],
+              [90 + (i % 5) * 20, 50 - Math.floor(i / 5) * 15],
+              [90 + (i % 5) * 20, 35 - Math.floor(i / 5) * 15],
+              [70 + (i % 5) * 20, 35 - Math.floor(i / 5) * 15],
+              [70 + (i % 5) * 20, 50 - Math.floor(i / 5) * 15],
+            ]],
           },
         })),
       };
@@ -229,16 +229,25 @@ export default function Dashboard() {
     }
   }, []);
 
-  const roleProvince = user?.role !== 'national' ? user?.province : undefined;
-  const availableProvinces = ['全国', ...(roleProvince ? [roleProvince] : PROVINCE_OPTIONS)];
+  // 省份筛选：非国家级只能看本省
+  const availableProvinces = ['全国', ...(user?.role !== 'national' && user?.province ? [user.province] : PROVINCE_OPTIONS)];
+  const scopeLabel = user?.role === 'national'
+    ? '全国'
+    : user?.province
+      ? user?.city ? `${user.province} · ${user.city}` : user.province
+      : '全国';
 
   return (
     <div className="space-y-6 animate-fade-in">
-      {/* 顶部筛选栏 */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h2 className="text-xl font-serif font-bold text-ink-900">数据概览</h2>
-          <p className="text-sm text-gray-500 mt-0.5">实时监测全国水产养殖环境与病害情况</p>
+          <h2 className="text-xl font-serif font-bold text-ink-900">
+            {scopeLabel}数据概览
+            {selectedSpecies !== '全部' && (
+              <span className="ml-2 text-sm font-normal text-ocean-600">· {selectedSpecies}</span>
+            )}
+          </h2>
+          <p className="text-sm text-gray-500 mt-0.5">实时监测{scopeLabel}水产养殖环境与病害情况</p>
         </div>
         <div className="flex items-center gap-3">
           <div className="relative">
@@ -269,7 +278,6 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* 指标概览卡片 */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
         <StatCard
           label="养殖场总数"
@@ -277,36 +285,31 @@ export default function Dashboard() {
           suffix="家"
           icon={Factory}
           gradient="bg-gradient-to-br from-ocean-600 to-ocean-800"
-          trend={2.3}
         />
         <StatCard
           label="水质达标率"
           value={formatPercent(overview.avgWaterQualityPassRate, 1)}
           icon={Droplets}
           gradient="bg-gradient-to-br from-aqua-500 to-ocean-600"
-          trend={1.2}
         />
         <StatCard
           label="病害发生率"
           value={formatPercent(overview.avgDiseaseRate, 1)}
           icon={Bug}
           gradient="bg-gradient-to-br from-amber-500 to-orange-600"
-          trend={-0.5}
         />
         <StatCard
           label="预计总产量"
-          value={formatNumber(overview.estimatedTotalYield / 10000, 1)}
-          suffix="万吨"
+          value={overview.estimatedTotalYield >= 10000 ? formatNumber(overview.estimatedTotalYield / 10000, 1) : formatNumber(overview.estimatedTotalYield, 0)}
+          suffix={overview.estimatedTotalYield >= 10000 ? '万吨' : '吨'}
           icon={TrendingUp}
           gradient="bg-gradient-to-br from-emerald-500 to-teal-700"
-          trend={3.8}
         />
         <StatCard
           label="平均成活率"
           value={formatPercent(overview.avgSurvivalRate, 1)}
           icon={Fish}
           gradient="bg-gradient-to-br from-indigo-500 to-ocean-700"
-          trend={0.8}
         />
         <StatCard
           label="活跃预警"
@@ -319,11 +322,10 @@ export default function Dashboard() {
         />
       </div>
 
-      {/* 中部：热力图 + 排名 */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         <Card
-          title="全国水质达标率热力图"
-          subtitle="颜色越深达标率越高，点击省份可查看详情"
+          title={`${scopeLabel}水质达标率热力图`}
+          subtitle={selectedSpecies !== '全部' ? `品种：${selectedSpecies}` : '点击省份可查看详情'}
           className="xl:col-span-2"
           extra={
             <div className="flex items-center gap-2 text-xs">
@@ -339,23 +341,29 @@ export default function Dashboard() {
             style={{ height: 420 }}
             onEvents={{
               click: (params: any) => {
-                const zone = zones.find((z) => z.province === params.name);
+                const zone = filteredZones.find((z) => z.province === params.name);
                 if (zone) navigate(`/zone/${zone.id}`);
               },
             }}
           />
         </Card>
 
-        <Card title="产量排名 TOP10" subtitle="按省份预计产量排序（单位：吨）">
-          <ReactECharts option={rankingOption} style={{ height: 420 }} />
+        <Card
+          title={`产量排名 TOP${Math.min(10, displayStats.length)}`}
+          subtitle={selectedSpecies !== '全部' ? `品种：${selectedSpecies}` : '按省份预计产量排序'}
+        >
+          {displayStats.length > 0 ? (
+            <ReactECharts option={rankingOption} style={{ height: 420 }} />
+          ) : (
+            <div className="h-[420px] flex items-center justify-center text-gray-400 text-sm">暂无数据</div>
+          )}
         </Card>
       </div>
 
-      {/* 底部：预警列表 + 实时数据 */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card
           title="实时预警"
-          subtitle="最新预警信息与处置状态"
+          subtitle={`当前范围内 ${filteredAlerts.length} 条预警`}
           extra={
             <button
               onClick={() => navigate('/alerts')}
@@ -379,7 +387,7 @@ export default function Dashboard() {
                   <AlertCircle className="w-5 h-5" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <span className="font-medium text-sm text-ink-900 truncate">{alert.zoneName}</span>
                     <span className={cn(
                       'px-2 py-0.5 text-[10px] rounded-full border font-medium',
@@ -400,18 +408,15 @@ export default function Dashboard() {
               </div>
             ))}
             {filteredAlerts.length === 0 && (
-              <div className="text-center text-gray-400 py-8 text-sm">暂无活跃预警</div>
+              <div className="text-center text-gray-400 py-8 text-sm">当前范围暂无活跃预警</div>
             )}
           </div>
         </Card>
 
-        <Card
-          title="养殖区动态"
-          subtitle="各养殖区实时状态概览"
-        >
-          <div className="space-y-3">
-            {zones.slice(0, 6).map((zone) => {
-              const stats = provinceStats.find((s) => s.province === zone.province);
+        <Card title="养殖区动态" subtitle={`共 ${filteredZones.length} 个养殖区`}>
+          <div className="space-y-3 max-h-[420px] overflow-y-auto pr-2">
+            {filteredZones.slice(0, 10).map((zone) => {
+              const zoneStats = provinceStats.find((s) => s.province === zone.province);
               return (
                 <div
                   key={zone.id}
@@ -430,14 +435,20 @@ export default function Dashboard() {
                     </div>
                   </div>
                   <div className="text-right">
-                    <div className="text-sm font-semibold" style={{ color: stats ? getWaterQualityColor(stats.waterQualityPassRate) : '#088395' }}>
-                      {stats ? formatPercent(stats.waterQualityPassRate) : '--'}
+                    <div
+                      className="text-sm font-semibold"
+                      style={{ color: zoneStats ? getWaterQualityColor(zoneStats.waterQualityPassRate) : '#088395' }}
+                    >
+                      {zoneStats ? formatPercent(zoneStats.waterQualityPassRate) : '--'}
                     </div>
                     <div className="text-[11px] text-gray-400">达标率</div>
                   </div>
                 </div>
               );
             })}
+            {filteredZones.length === 0 && (
+              <div className="text-center text-gray-400 py-8 text-sm">当前范围暂无匹配的养殖区</div>
+            )}
           </div>
         </Card>
       </div>

@@ -10,17 +10,25 @@ import {
   AlertTriangle,
   Fish,
   Activity,
+  Shield,
 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import { useDataStore } from '../store/dataStore';
+import { useAuthStore } from '../store/authStore';
 import { cn, formatDate, formatNumber, formatPercent, formatDateTime, getStatusColor } from '../utils';
 
 export default function ZoneDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { getZoneById, getZonePonds, getZoneWaterQuality, getZoneDiseases } = useDataStore();
+  const { getZoneById, getZonePonds, getZoneWaterQuality, getZoneDiseases, filterZonesByScope } = useDataStore();
+  const { user } = useAuthStore();
+
+  const scopedZoneIds = useMemo(() => {
+    return new Set(filterZonesByScope(user?.role || 'national', user?.province, user?.city).map((z) => z.id));
+  }, [filterZonesByScope, user]);
 
   const zone = getZoneById(id || '');
+  const canAccess = zone && scopedZoneIds.has(zone.id);
   const ponds = getZonePonds(id || '');
   const waterQuality = getZoneWaterQuality(id || '');
   const diseases = getZoneDiseases(id || '');
@@ -153,6 +161,18 @@ export default function ZoneDetail() {
     return (
       <div className="text-center py-16 text-gray-500">
         未找到该养殖区信息
+        <button onClick={() => navigate('/dashboard')} className="block mx-auto mt-4 text-ocean-600">
+          返回看板
+        </button>
+      </div>
+    );
+  }
+
+  if (!canAccess) {
+    return (
+      <div className="text-center py-16 text-gray-500">
+        <Shield className="w-12 h-12 mx-auto mb-3 text-gray-300" />
+        您无权限查看该养殖区数据
         <button onClick={() => navigate('/dashboard')} className="block mx-auto mt-4 text-ocean-600">
           返回看板
         </button>

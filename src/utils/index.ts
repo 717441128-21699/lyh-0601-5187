@@ -127,3 +127,36 @@ export const parseExcelFormula = (data: any[][]): {
     suitableSpecies: ['草鱼'],
   };
 };
+
+export const parseExcelFeedingPlan = (data: any[][]): {
+  pondName: string;
+  formulaName: string;
+  dailyAmount: number;
+  frequency: number;
+}[] => {
+  if (!data || data.length < 2) return [];
+  const headerRow = data[0] || [];
+  const colIdx: Record<string, number> = {};
+  headerRow.forEach((cell: any, idx: number) => {
+    const text = String(cell || '');
+    if (text.includes('养殖池') || text.includes('池塘')) colIdx.pondName = idx;
+    else if (text.includes('配方') || text.includes('饲料')) colIdx.formulaName = idx;
+    else if (text.includes('日投喂') || text.includes('日投量') || (text.includes('投喂量') && text.includes('日'))) colIdx.dailyAmount = idx;
+    else if (text.includes('投喂量') && colIdx.dailyAmount === undefined) colIdx.dailyAmount = idx;
+    else if (text.includes('频次') || text.includes('次数')) colIdx.frequency = idx;
+  });
+  const result: { pondName: string; formulaName: string; dailyAmount: number; frequency: number }[] = [];
+  for (let r = 1; r < data.length; r++) {
+    const row = data[r] || [];
+    if (!row[colIdx.pondName] && !row[colIdx.formulaName]) continue;
+    const dailyAmount = Number(row[colIdx.dailyAmount]);
+    const frequency = Number(row[colIdx.frequency]);
+    result.push({
+      pondName: String(row[colIdx.pondName] || `养殖池${r}`),
+      formulaName: String(row[colIdx.formulaName] || ''),
+      dailyAmount: isNaN(dailyAmount) ? 50 : dailyAmount,
+      frequency: isNaN(frequency) ? 3 : frequency,
+    });
+  }
+  return result;
+};
