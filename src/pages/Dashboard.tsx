@@ -70,47 +70,67 @@ export default function Dashboard() {
     setSelectedSpecies,
     setSelectedProvince,
     computeOverviewStats,
-    computeProvinceStats,
+    computeRegionStats,
     filterZonesByScope,
     filterAlertsByScope,
   } = useDataStore();
 
   const role = user?.role || 'national';
-  const province = user?.province;
-  const city = user?.city;
+  const userProvince = user?.province;
+  const userCity = user?.city;
   const farmIds = user?.farmIds;
 
-  // 省份筛选+品种+角色范围 → 最终生效的省份参数
-  const effectiveProvince = selectedProvince === '全国' ? province : selectedProvince;
+  // 核心逻辑：根据角色+看板选择的省份+品种 计算最终过滤参数
+  // 国家级：用户可在看板上选"全国"或具体省份，selectedProvince真正作为省份筛选参数
+  // 省级：只有自己省，不切
+  // 市级：只有自己市，不切，热力图/排名按 city 分组
+  const filterProvince = (() => {
+    if (farmIds && farmIds.length > 0) return undefined;
+    if (role === 'national') {
+      return selectedProvince === '全国' ? undefined : selectedProvince;
+    }
+    if (role === 'provincial') return userProvince;
+    if (role === 'municipal' || role === 'technician') return userProvince;
+    return undefined;
+  })();
 
-  // 统计卡片：受省份筛选+品种+角色+farmIds影响
-  const overview = useMemo(
-    () => computeOverviewStats(role, effectiveProvince, city, selectedSpecies, farmIds),
-    [computeOverviewStats, role, effectiveProvince, city, selectedSpecies, farmIds]
-  );
+  const filterCity = (() => {
+    if (farmIds && farmIds.length > 0) return undefined;
+    if (role === 'municipal' || role === 'technician') return userCity;
+    // 养殖户按farmIds，不按city
+    return undefined;
+  })();
 
-  // 省份统计：受省份筛选+品种+角色+farmIds影响
-  const provinceStats = useMemo(
-    () => computeProvinceStats(role, effectiveProvince, selectedSpecies, farmIds),
-    [computeProvinceStats, role, effectiveProvince, selectedSpecies, farmIds]
-  );
+  // 热力图/排名按什么维度分组
+  const groupBy: 'province' | 'city' = (role === 'municipal' || role === 'technician') ? 'city' : 'province';
 
-  // 养殖区动态：受省份筛选+品种+角色+farmIds影响
+  // ⚠️ 统一从同一个过滤后的养殖区集合衍生所有数据，确保口径一致
   const filteredZones = useMemo(
-    () => filterZonesByScope(role, effectiveProvince, city, selectedSpecies, farmIds),
-    [filterZonesByScope, role, effectiveProvince, city, selectedSpecies, farmIds]
+    () => filterZonesByScope(role, filterProvince, filterCity, selectedSpecies, farmIds),
+    [filterZonesByScope, role, filterProvince, filterCity, selectedSpecies, farmIds]
   );
 
-  // 实时预警：受省份筛选+品种+角色+farmIds影响
+  // 统计卡片：直接基于 filteredZones 计算
+  const overview = useMemo(
+    () => computeOverviewStats(role, filterProvince, filterCity, selectedSpecies, farmIds),
+    [computeOverviewStats, role, filterProvince, filterCity, selectedSpecies, farmIds]
+  );
+
+  // 热力图 & 产量排名：基于同一个 filteredZones 动态聚合
+  const regionStats = useMemo(
+    () => computeRegionStats(filteredZones, selectedSpecies, groupBy),
+    [computeRegionStats, filteredZones, selectedSpecies, groupBy]
+  );
+
+  // 实时预警：同样基于同一个过滤范围
   const filteredAlerts = useMemo(() => {
-    return filterAlertsByScope(role, effectiveProvince, city, selectedSpecies, farmIds)
+    return filterAlertsByScope(role, filterProvince, filterCity, selectedSpecies, farmIds)
       .filter((a) => a.status !== 'closed' && a.status !== 'false_alarm')
       .sort((a, b) => b.triggeredAt.localeCompare(a.triggeredAt))
       .slice(0, 6);
-  }, [filterAlertsByScope, role, effectiveProvince, city, selectedSpecies, farmIds]);
+  }, [filterAlertsByScope, role, filterProvince, filterCity, selectedSpecies, farmIds]);
 
-  // 热力图和排名使用provinceStats
-  const displayStats = provinceStats;
+  const displayStats = regionStats;
 
   const heatmapOption = useMemo(() => {
     const data = displayStats.map((s) => ({
@@ -127,11 +147,12 @@ export default function Dashboard() {
         formatter: (params: any) => {
           const stat = displayStats.find((s) => s.province === params.name);
           if (!stat) return params.name;
+          const unit = stat.isCity ? '养殖区' : '养殖场';
           return `
             <div style="padding:4px">
               <div style="font-weight:600;margin-bottom:6px">${params.name}</div>
               <div>水质达标率: <b>${formatPercent(stat.waterQualityPassRate)}</b></div>
-              <div>养殖场: ${stat.farmCount} 家</div>
+              <div>${unit}: ${stat.farmCount} 家</div>
               <div>病害率: ${formatPercent(stat.diseaseRate)}</div>
               <div>预计产量: ${formatNumber(stat.estimatedYield, 0)} 吨</div>
             </div>
@@ -234,22 +255,29 @@ export default function Dashboard() {
     }
   }, []);
 
-  // 省份筛选选项：国家级可切换全国/各省；省级只能看本省；市级/养殖户不可切
+  // 省份筛选：只有国家级可切全国/各省
   const availableProvinces = (() => {
-    if (farmIds && farmIds.length > 0) return [province || '全国'];
+    if (farmIds && farmIds.length > 0) return [userProvince || '全国'];
     if (role === 'national') return ['全国', ...PROVINCE_OPTIONS];
-    if (role === 'provincial' && province) return [province];
-    if ((role === 'municipal' || role === 'technician') && province) return [province];
+    if (role === 'provincial' && userProvince) return [userProvince];
+    if ((role === 'municipal' || role === 'technician') && userProvince) return [userProvince];
     return ['全国', ...PROVINCE_OPTIONS];
   })();
 
-  const scopeLabel = farmIds && farmIds.length > 0
-    ? `${province || ''} ${city || ''} · 我的养殖场`
-    : role === 'national'
-      ? (selectedProvince === '全国' ? '全国' : selectedProvince)
-      : province
-        ? city ? `${province} · ${city}` : province
-        : '全国';
+  // 标题范围展示
+  const scopeLabel = (() => {
+    if (farmIds && farmIds.length > 0) {
+      return `${userProvince || ''} ${userCity || ''} · 我的养殖场`;
+    }
+    if (role === 'national') {
+      return selectedProvince === '全国' ? '全国' : selectedProvince;
+    }
+    if (role === 'provincial') return userProvince || '全国';
+    if (role === 'municipal' || role === 'technician') {
+      return `${userProvince || ''} · ${userCity || ''}`;
+    }
+    return '全国';
+  })();
 
   const canSwitchProvince = role === 'national';
 
@@ -263,7 +291,9 @@ export default function Dashboard() {
               <span className="ml-2 text-sm font-normal text-ocean-600">· {selectedSpecies}</span>
             )}
           </h2>
-          <p className="text-sm text-gray-500 mt-0.5">实时监测{scopeLabel}水产养殖环境与病害情况</p>
+          <p className="text-sm text-gray-500 mt-0.5">
+            实时监测{scopeLabel}水产养殖环境与病害情况 · 共 {filteredZones.length} 个养殖区
+          </p>
         </div>
         <div className="flex items-center gap-3">
           {canSwitchProvince && (
@@ -343,7 +373,7 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         <Card
           title={`${scopeLabel}水质达标率热力图`}
-          subtitle={selectedSpecies !== '全部' ? `品种：${selectedSpecies}` : '点击省份可查看详情'}
+          subtitle={selectedSpecies !== '全部' ? `品种：${selectedSpecies} · ${groupBy === 'city' ? '按城市' : '按省份'}统计` : groupBy === 'city' ? '按城市统计' : '按省份统计'}
           className="xl:col-span-2"
           extra={
             <div className="flex items-center gap-2 text-xs">
@@ -359,7 +389,7 @@ export default function Dashboard() {
             style={{ height: 420 }}
             onEvents={{
               click: (params: any) => {
-                const zone = filteredZones.find((z) => z.province === params.name);
+                const zone = filteredZones.find((z) => (groupBy === 'city' ? z.city : z.province) === params.name);
                 if (zone) navigate(`/zone/${zone.id}`);
               },
             }}
@@ -368,7 +398,7 @@ export default function Dashboard() {
 
         <Card
           title={`产量排名 TOP${Math.min(10, displayStats.length)}`}
-          subtitle={selectedSpecies !== '全部' ? `品种：${selectedSpecies}` : '按省份预计产量排序'}
+          subtitle={selectedSpecies !== '全部' ? `品种：${selectedSpecies}` : groupBy === 'city' ? '按城市统计' : '按省份统计'}
         >
           {displayStats.length > 0 ? (
             <ReactECharts option={rankingOption} style={{ height: 420 }} />
@@ -434,7 +464,9 @@ export default function Dashboard() {
         <Card title="养殖区动态" subtitle={`共 ${filteredZones.length} 个养殖区`}>
           <div className="space-y-3 max-h-[420px] overflow-y-auto pr-2">
             {filteredZones.slice(0, 10).map((zone) => {
-              const zoneStats = provinceStats.find((s) => s.province === zone.province);
+              // 用该养殖区所在"分组"（省或市）的统计数据做展示
+              const key = groupBy === 'city' ? zone.city : zone.province;
+              const zoneStats = regionStats.find((s) => s.province === key);
               return (
                 <div
                   key={zone.id}

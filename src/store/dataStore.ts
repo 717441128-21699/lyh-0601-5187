@@ -145,13 +145,19 @@ interface DataState {
   setSelectedSpecies: (s: string) => void;
   setSelectedProvince: (p: string) => void;
 
-  // 数据过滤（按角色+省份+品种+养殖场）
+  // 数据过滤（按角色+省份+城市+品种+养殖场）
+  // province/city 传参规则：
+  //   - 当role为national时，province/city 作为"额外筛选条件"（即用户在看板主动选择的省份）
+  //   - 当role为provincial时，province 为用户管辖省；若city有值则额外过滤该城市
+  //   - 当role为municipal/farmer/technician时，city 为用户管辖市
   filterZonesByScope: (role: UserRole, province?: string, city?: string, species?: string, farmIds?: string[]) => FarmZone[];
   filterAlertsByScope: (role: UserRole, province?: string, city?: string, species?: string, farmIds?: string[]) => Alert[];
   filterReportsByScope: (role: UserRole, province?: string, city?: string, species?: string, farmIds?: string[]) => WeeklyReport[];
   filterPlansByScope: (role: UserRole, province?: string, city?: string, farmIds?: string[]) => FeedingPlan[];
   filterRecordsByScope: (role: UserRole, province?: string, city?: string, farmIds?: string[]) => FeedingRecord[];
   computeOverviewStats: (role: UserRole, province?: string, city?: string, species?: string, farmIds?: string[]) => OverviewStats;
+  // 根据过滤后的养殖区动态计算区域统计（支持省级按省聚合，市级按市聚合）
+  computeRegionStats: (filteredZones: FarmZone[], species?: string, groupBy?: 'province' | 'city') => ProvinceStats[];
   computeProvinceStats: (role: UserRole, province?: string, species?: string, farmIds?: string[]) => ProvinceStats[];
 
   canAccessZone: (zoneId: string, role: UserRole, province?: string, city?: string, farmIds?: string[]) => boolean;
@@ -252,20 +258,30 @@ export const useDataStore = create<DataState>()(
       setSelectedSpecies: (s) => set({ selectedSpecies: s }),
       setSelectedProvince: (p) => set({ selectedProvince: p }),
 
-      // 按管辖范围和品种筛选养殖区
+      // 通用区域过滤：province/city 是"筛选参数"，在任何角色下都会生效
+      // 优先按 farmIds（养殖户名下养殖场）过滤，再按 role 的管辖范围过滤，最后叠加 province/city 额外筛选
       filterZonesByScope: (role, province, city, species, farmIds) => {
         const zones = get().zones;
         let result = zones;
+
         if (farmIds && farmIds.length > 0) {
           const farmSet = new Set(farmIds);
           result = result.filter((z) => farmSet.has(z.id));
-        } else if (role === 'provincial' && province) {
-          result = result.filter((z) => z.province === province);
-        } else if ((role === 'municipal' || role === 'technician') && city) {
-          result = result.filter((z) => z.city === city);
-        } else if (role === 'farmer' && city) {
-          result = result.filter((z) => z.city === city);
+        } else {
+          // 按角色默认管辖范围
+          if (role === 'provincial' && province) {
+            result = result.filter((z) => z.province === province);
+          } else if (role === 'municipal' || role === 'technician') {
+            if (city) {
+              result = result.filter((z) => z.city === city);
+            } else if (province) {
+              result = result.filter((z) => z.province === province);
+            }
+          } else if (role === 'farmer' && city) {
+            result = result.filter((z) => z.city === city);
+          }
         }
+
         if (species && species !== '全部') {
           result = result.filter((z) => z.species.includes(species));
         }
@@ -324,31 +340,46 @@ export const useDataStore = create<DataState>()(
         };
       },
 
-      computeProvinceStats: (role, province, species, farmIds) => {
-        const allStats = get().provinceStats;
-        if (farmIds && farmIds.length > 0) {
-          const zones = get().filterZonesByScope(role, province, undefined, species, farmIds);
-          const provinceSet = new Set(zones.map((z) => z.province));
-          return allStats.filter((s) => provinceSet.has(s.province));
-        }
-        if (role === 'provincial' && province) {
-          return allStats.filter((s) => s.province === province);
-        }
-        if (role === 'municipal' || role === 'technician') {
-          const zones = get().filterZonesByScope(role, province, undefined, species);
-          const provinceSet = new Set(zones.map((z) => z.province));
-          return allStats.filter((s) => provinceSet.has(s.province));
-        }
+      // 基于已过滤的养殖区动态聚合省/市级统计
+      // groupBy='province'（省级/国家级默认按省聚合）
+      // groupBy='city'（市级默认按市聚合，把每个城市当作"省"显示在地图/排名里）
+      computeRegionStats: (filteredZones, species, groupBy = 'province') => {
+        const thresholds = get().thresholds;
+        const groups = new Map<string, FarmZone[]>();
+        filteredZones.forEach((z) => {
+          const key = groupBy === 'city' ? z.city : z.province;
+          if (!groups.has(key)) groups.set(key, []);
+          groups.get(key)!.push(z);
+        });
+        const result: ProvinceStats[] = [];
+        groups.forEach((zonesInGroup, key) => {
+          const allWq = zonesInGroup.flatMap((z) => get().waterQuality[z.id] || []);
+          const allDis = zonesInGroup.flatMap((z) => get().diseases[z.id] || []);
+          const doPass = allWq.filter((w) => w.dissolvedOxygen >= thresholds.dissolvedOxygenMin).length;
+          const passRate = allWq.length > 0 ? (doPass / allWq.length) * 100 : 85;
+          const avgDis = allDis.length > 0 ? allDis.reduce((s, d) => s + d.rate, 0) / allDis.length : 2;
+          const totalArea = zonesInGroup.reduce((s, z) => s + z.totalArea, 0);
+          const yieldPerMu = (species === undefined || species === '全部')
+            ? 0.8
+            : (['南美白对虾', '海参', '鲍鱼'].includes(species) ? 1.5 : 0.6);
+          result.push({
+            province: key,
+            farmCount: zonesInGroup.length,
+            waterQualityPassRate: Math.round(passRate * 10) / 10,
+            diseaseRate: Math.round(avgDis * 10) / 10,
+            estimatedYield: Math.floor(totalArea * yieldPerMu),
+            avgSurvivalRate: Math.round((85 + Math.random() * 10) * 10) / 10,
+            isCity: groupBy === 'city',
+          });
+        });
+        return result.sort((a, b) => b.estimatedYield - a.estimatedYield);
+      },
 
-        if (species && species !== '全部') {
-          const factor = ['南美白对虾', '海参', '鲍鱼'].includes(species) ? 1.3 : 0.7;
-          return allStats.map((s) => ({
-            ...s,
-            estimatedYield: Math.floor(s.estimatedYield * factor),
-            farmCount: Math.floor(s.farmCount * 0.6),
-          }));
-        }
-        return allStats;
+      // 兼容旧方法名（避免破坏其他引用）
+      computeProvinceStats: (role, province, species, farmIds) => {
+        const zones = get().filterZonesByScope(role, province, undefined, species, farmIds);
+        const groupBy: 'province' | 'city' = (role === 'municipal' || role === 'technician') ? 'city' : 'province';
+        return get().computeRegionStats(zones, species, groupBy);
       },
 
       canAccessZone: (zoneId, role, province, city, farmIds) => {

@@ -19,10 +19,10 @@ function ProtectedRoute({ children, allowedRoles }: { children: React.ReactNode;
   const loading = useDataStore((s) => s.loading);
 
   useEffect(() => {
-    if (isAuthenticated) {
+    if (isAuthenticated && loading) {
       initData();
     }
-  }, [isAuthenticated, initData]);
+  }, [isAuthenticated, loading, initData]);
 
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />;

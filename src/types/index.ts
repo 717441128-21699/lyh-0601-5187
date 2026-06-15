@@ -174,6 +174,7 @@ export interface ProvinceStats {
   diseaseRate: number;
   estimatedYield: number;
   avgSurvivalRate: number;
+  isCity?: boolean;
 }
 
 export interface OverviewStats {
