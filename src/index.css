@@ -1,0 +1,113 @@
+@import url("https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;600;700&family=Noto+Serif+SC:wght@500;600;700&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: "Noto Sans SC", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  line-height: 1.6;
+  font-weight: 400;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background-color: #F0F4F8;
+  color: #1A1A2E;
+}
+
+/* 滚动条样式 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #F0F4F8;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #A9D5E6;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #088395;
+}
+
+/* 水波纹背景动画 */
+@keyframes wave {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+.wave-bg {
+  background: linear-gradient(
+    -45deg,
+    #0A4D68,
+    #088395,
+    #05BFDB,
+    #0A4D68
+  );
+  background-size: 400% 400%;
+  animation: wave 15s ease infinite;
+}
+
+/* 卡片悬浮效果 */
+.card-hover {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.card-hover:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 40px -12px rgba(10, 77, 104, 0.25);
+}
+
+/* 数字滚动动画 */
+@keyframes countUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.number-animate {
+  animation: countUp 0.8s ease-out;
+}
+
+/* 脉冲光点动画 */
+@keyframes pulseDot {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(230, 57, 70, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(230, 57, 70, 0);
+  }
+}
+
+.pulse-dot {
+  animation: pulseDot 2s infinite;
+}
