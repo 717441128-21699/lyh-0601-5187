@@ -73,6 +73,7 @@ export default function Dashboard() {
     computeRegionStats,
     filterZonesByScope,
     filterAlertsByScope,
+    canAccessZone,
   } = useDataStore();
 
   const role = user?.role || 'national';
@@ -390,7 +391,9 @@ export default function Dashboard() {
             onEvents={{
               click: (params: any) => {
                 const zone = filteredZones.find((z) => (groupBy === 'city' ? z.city : z.province) === params.name);
-                if (zone) navigate(`/zone/${zone.id}`);
+                if (zone && canAccessZone(zone.id, role, userProvince, userCity, farmIds)) {
+                  navigate(`/zone/${zone.id}`);
+                }
               },
             }}
           />
@@ -470,7 +473,11 @@ export default function Dashboard() {
               return (
                 <div
                   key={zone.id}
-                  onClick={() => navigate(`/zone/${zone.id}`)}
+                  onClick={() => {
+                    if (canAccessZone(zone.id, role, userProvince, userCity, farmIds)) {
+                      navigate(`/zone/${zone.id}`);
+                    }
+                  }}
                   className="flex items-center justify-between p-3 rounded-lg hover:bg-ocean-50 transition cursor-pointer border border-gray-50"
                 >
                   <div className="flex items-center gap-3">

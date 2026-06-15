@@ -158,7 +158,7 @@ interface DataState {
   computeOverviewStats: (role: UserRole, province?: string, city?: string, species?: string, farmIds?: string[]) => OverviewStats;
   // 根据过滤后的养殖区动态计算区域统计（支持省级按省聚合，市级按市聚合）
   computeRegionStats: (filteredZones: FarmZone[], species?: string, groupBy?: 'province' | 'city') => ProvinceStats[];
-  computeProvinceStats: (role: UserRole, province?: string, species?: string, farmIds?: string[]) => ProvinceStats[];
+  computeProvinceStats: (role: UserRole, province?: string, city?: string, species?: string, farmIds?: string[]) => ProvinceStats[];
 
   canAccessZone: (zoneId: string, role: UserRole, province?: string, city?: string, farmIds?: string[]) => boolean;
 
@@ -259,29 +259,47 @@ export const useDataStore = create<DataState>()(
       setSelectedProvince: (p) => set({ selectedProvince: p }),
 
       // 通用区域过滤：province/city 是"筛选参数"，在任何角色下都会生效
-      // 优先按 farmIds（养殖户名下养殖场）过滤，再按 role 的管辖范围过滤，最后叠加 province/city 额外筛选
+      // 优先级：farmIds > 角色管辖范围 > 额外传入的 province/city 筛选 > 品种筛选
+      // 所有场景同时校验 province 和 city（如果有值），避免同名城市混入
       filterZonesByScope: (role, province, city, species, farmIds) => {
         const zones = get().zones;
         let result = zones;
 
+        // 1. 养殖户名下养殖场优先（最高优先级）
         if (farmIds && farmIds.length > 0) {
           const farmSet = new Set(farmIds);
           result = result.filter((z) => farmSet.has(z.id));
         } else {
-          // 按角色默认管辖范围
+          // 2. 按角色确定默认管辖范围
           if (role === 'provincial' && province) {
+            // 省级：只看本省
             result = result.filter((z) => z.province === province);
           } else if (role === 'municipal' || role === 'technician') {
-            if (city) {
+            // 市级/技术员：只看本市（同时校验省份，避免同名城市）
+            if (city && province) {
+              result = result.filter((z) => z.province === province && z.city === city);
+            } else if (city) {
               result = result.filter((z) => z.city === city);
             } else if (province) {
               result = result.filter((z) => z.province === province);
             }
-          } else if (role === 'farmer' && city) {
-            result = result.filter((z) => z.city === city);
+          } else if (role === 'farmer' && province && city) {
+            // 养殖户无farmIds时，同时校验省+市
+            result = result.filter((z) => z.province === province && z.city === city);
           }
+          // role === 'national' 管辖范围默认全国，不做额外限制
         }
 
+        // 3. 叠加传入的 province/city 额外筛选参数（国家级用户选省、或省级用户选市）
+        // 注意：这些是在"管辖范围"基础上的二次筛选
+        if (role === 'national' && province) {
+          result = result.filter((z) => z.province === province);
+        }
+        if (role === 'provincial' && city) {
+          result = result.filter((z) => z.city === city);
+        }
+
+        // 4. 品种筛选
         if (species && species !== '全部') {
           result = result.filter((z) => z.species.includes(species));
         }
@@ -376,8 +394,8 @@ export const useDataStore = create<DataState>()(
       },
 
       // 兼容旧方法名（避免破坏其他引用）
-      computeProvinceStats: (role, province, species, farmIds) => {
-        const zones = get().filterZonesByScope(role, province, undefined, species, farmIds);
+      computeProvinceStats: (role, province, city, species, farmIds) => {
+        const zones = get().filterZonesByScope(role, province, city, species, farmIds);
         const groupBy: 'province' | 'city' = (role === 'municipal' || role === 'technician') ? 'city' : 'province';
         return get().computeRegionStats(zones, species, groupBy);
       },
@@ -388,8 +406,19 @@ export const useDataStore = create<DataState>()(
         if (role === 'national') return true;
         if (farmIds && farmIds.length > 0) return farmIds.includes(zoneId);
         if (role === 'provincial') return !province || zone.province === province;
-        if (role === 'municipal' || role === 'technician') return (!city || zone.city === city) && (!province || zone.province === province);
-        if (role === 'farmer') return farmIds ? farmIds.includes(zoneId) : (!city || zone.city === city);
+        if (role === 'municipal' || role === 'technician') {
+          // 市级：同时校验省份+城市，避免同名城市混入
+          const matchProvince = !province || zone.province === province;
+          const matchCity = !city || zone.city === city;
+          return matchProvince && matchCity;
+        }
+        if (role === 'farmer') {
+          if (farmIds) return farmIds.includes(zoneId);
+          // 养殖户无farmIds时，双校验省份+城市
+          const matchProvince = !province || zone.province === province;
+          const matchCity = !city || zone.city === city;
+          return matchProvince && matchCity;
+        }
         return false;
       },
 
